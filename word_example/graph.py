@@ -64,17 +64,20 @@ class WordExampleState(TypedDict, total=False):
     model: str
 
 
-class WordExampleOutState(TypedDict):
+class WordExampleOutState(TypedDict, total=False):
     """출력 스키마.
 
     분리하지 않으면 입력 필드(meaning, avoid, part_of_speech)가 응답에 섞여
     계약이 깨진다. 호출자는 계약에 없는 필드를 보게 된다.
+
+    `usage` 는 허브가 기록용으로 가져가고 응답에서 제거한다 - 계약의 일부가 아니다.
     """
 
     english: str
     example: str
     example_ko: str
     model: str
+    usage: dict
 
 
 def _default_model() -> str:
@@ -95,17 +98,32 @@ def _structured():
             timeout=_TIMEOUT_S,
             max_retries=_MAX_RETRIES,
         )
-        _cached = llm.with_structured_output(Generated)
+        # include_raw: 구조화 출력만 받으면 사용량 메타데이터가 버려진다.
+        _cached = llm.with_structured_output(Generated, include_raw=True)
     return _cached
 
 
-def _call(payload: WordExampleIn) -> Generated:
-    return _structured().invoke(
+def _call(payload: WordExampleIn) -> tuple[Generated, dict]:
+    """(구조화 출력, 사용량). 사용량은 못 얻으면 빈 dict."""
+    res = _structured().invoke(
         [
             ("system", system_prompt()),
             ("human", build_user_message(payload)),
         ]
     )
+    # include_raw=True 면 {"raw": AIMessage, "parsed": Generated, ...}
+    if isinstance(res, dict):
+        gen = res.get("parsed")
+        if gen is None:
+            raise ValueError(f"구조화 출력 파싱 실패: {res.get('parsing_error')}")
+        meta = getattr(res.get("raw"), "usage_metadata", None) or {}
+        usage = (
+            {"input_tokens": meta.get("input_tokens"), "output_tokens": meta.get("output_tokens")}
+            if meta
+            else {}
+        )
+        return gen, usage
+    return res, {}
 
 
 def generate(state: WordExampleState) -> dict:
@@ -119,8 +137,12 @@ def generate(state: WordExampleState) -> dict:
     attempt = payload
     bad: list[str] = []
 
+    total_in = total_out = 0
     for _ in range(_MAX_REGENERATIONS + 1):
-        gen = _call(attempt)
+        gen, usage = _call(attempt)
+        # 재생성해도 토큰은 누적된다 - 실제로 쓴 만큼이 기록돼야 비용 환산이 맞는다.
+        total_in += usage.get("input_tokens") or 0
+        total_out += usage.get("output_tokens") or 0
         bad = violations(gen.example, gen.example_ko, payload)
         if not bad:
             out = WordExampleOut(
@@ -129,7 +151,10 @@ def generate(state: WordExampleState) -> dict:
                 example_ko=gen.example_ko,
                 model=_MODEL or _default_model(),
             )
-            return out.model_dump()
+            return {
+                **out.model_dump(),
+                "usage": {"input_tokens": total_in, "output_tokens": total_out},
+            }
         # 직전 실패작을 회피 목록에 얹어 같은 답을 다시 받지 않는다.
         # 원래 avoid 는 유지한다 - 호출자가 피하라고 준 것이다.
         attempt = attempt.model_copy(update={"avoid": [*attempt.avoid, gen.example]})

@@ -37,14 +37,18 @@ def _isolated_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _stub_llm(monkeypatch: pytest.MonkeyPatch):
     """구조화 출력만 갈아끼운다. 프롬프트 조립·검증·응답 조립은 실제 코드가 돈다."""
 
-    def _install(generated: dict | None = None, capture: list | None = None):
+    def _install(generated: dict | None = None, capture: list | None = None, usage: dict | None = None):
         payload = generated if generated is not None else _GENERATED
+
+        class _Raw:
+            usage_metadata = usage or {}
 
         class _Stub:
             def invoke(self, messages):
                 if capture is not None:
                     capture.append(messages)
-                return we.Generated.model_validate(payload)
+                # include_raw=True 형태를 흉내낸다
+                return {"parsed": we.Generated.model_validate(payload), "raw": _Raw()}
 
         monkeypatch.setattr(we, "_structured", lambda: _Stub())
 
@@ -97,10 +101,36 @@ def test_model_field_reports_the_configured_model(_stub_llm, monkeypatch) -> Non
     assert out["model"] == "anthropic:claude-sonnet-4-6"
 
 
-def test_output_matches_the_contract(_stub_llm) -> None:
+def test_graph_output_carries_usage_for_recording(_stub_llm) -> None:
+    """그래프 출력에는 usage 가 실린다 - 허브가 기록용으로 가져간다."""
     _stub_llm()
     out = we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
-    assert set(out) == {"english", "example", "example_ko", "model"}
+    assert set(out) == {"english", "example", "example_ko", "model", "usage"}
+
+
+def test_hub_strips_usage_from_the_response(_stub_llm) -> None:
+    """usage 는 계약의 일부가 아니다. 호출자가 볼 필드가 아니다."""
+    _stub_llm()
+    out = hub_graph.invoke(_envelope())
+    assert set(out["output"]) == {"english", "example", "example_ko", "model"}
+
+
+def test_usage_is_recorded(_stub_llm, _isolated_log: Path) -> None:
+    """비용 환산의 근거다. 기록되지 않으면 #14 품질 실측이 불가능하다."""
+    _stub_llm(usage={"input_tokens": 210, "output_tokens": 64})
+    hub_graph.invoke(_envelope())
+    entry = json.loads(_isolated_log.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["tokens_in"] == 210
+    assert entry["tokens_out"] == 64
+
+
+def test_regeneration_accumulates_tokens(_stub_sequence, _isolated_log: Path) -> None:
+    """재생성해도 실제로 쓴 만큼이 기록돼야 비용 환산이 맞는다."""
+    _stub_sequence([_BAD_SHORT, _GENERATED], usage={"input_tokens": 100, "output_tokens": 30})
+    hub_graph.invoke(_envelope())
+    entry = json.loads(_isolated_log.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["tokens_in"] == 200
+    assert entry["tokens_out"] == 60
 
 
 # --- 프롬프트 전달 ---
@@ -227,15 +257,18 @@ _BAD_NO_TARGET = {
 def _stub_sequence(monkeypatch: pytest.MonkeyPatch):
     """호출마다 다른 응답을 주는 스텁. 호출 기록을 남긴다."""
 
-    def _install(responses: list[dict]):
+    def _install(responses: list[dict], usage: dict | None = None):
         state = {"calls": 0, "messages": []}
+
+        class _Raw:
+            usage_metadata = usage or {}
 
         class _Stub:
             def invoke(self, messages):
                 state["messages"].append(messages)
                 i = min(state["calls"], len(responses) - 1)
                 state["calls"] += 1
-                return we.Generated.model_validate(responses[i])
+                return {"parsed": we.Generated.model_validate(responses[i]), "raw": _Raw()}
 
         monkeypatch.setattr(we, "_structured", lambda: _Stub())
         return state

@@ -37,6 +37,11 @@ from hub.registry import get, known_tasks
 
 _PLACEHOLDER = "<invalid>"
 
+# 그래프 출력의 이 키는 **기록용**이다. 허브가 가져가고 응답에서 제거한다.
+# 호출 계약에 안 넣는 이유: 호출자가 쓸 값이 아니고, 계약에 넣으면 모든 그래프가
+# 이 필드를 만들어야 한다. 관측은 허브의 관심사이지 계약의 일부가 아니다.
+_USAGE_KEY = "usage"
+
 
 class HubState(TypedDict, total=False):
     """진입 상태 = 봉투 그대로 + 출력."""
@@ -119,7 +124,7 @@ def dispatch(state: HubState) -> dict:
             output = spec.postprocess(output, payload)
 
         rec.ok(output)
-        return {"output": output}
+        return {"output": {k: v for k, v in output.items() if k != _USAGE_KEY}}
 
 
 graph = (
