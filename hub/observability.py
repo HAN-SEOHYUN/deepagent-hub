@@ -37,9 +37,22 @@ class Recorder:
 
     def __init__(self, entry: dict[str, Any]) -> None:
         self._entry = entry
+        self._settled = False
+        """결과가 명시적으로 정해졌는가.
+
+        거절(`rejected`)은 예외로 전파되는 것이 정상이므로, 그 예외가
+        `record()` 의 except 절에서 `error` 로 덮어쓰이면 안 된다.
+        `rejected` 와 `error` 를 가르는 것이 기록의 핵심이다 -
+        전자는 호출자 버그이고 토큰을 안 태웠다.
+        """
+
+    @property
+    def settled(self) -> bool:
+        return self._settled
 
     def ok(self, output: dict[str, Any]) -> None:
         """정상 종료. 출력에서 모델·토큰만 뽑는다 (원문은 안 남긴다)."""
+        self._settled = True
         self._entry["status"] = "ok"
         model = output.get("model")
         if isinstance(model, str):
@@ -51,6 +64,7 @@ class Recorder:
 
     def reject(self, reason: str) -> None:
         """LLM 에 닿기 전 거절. 호출자 버그를 뜻하며 토큰을 안 태웠다."""
+        self._settled = True
         self._entry["status"] = "rejected"
         self._entry["error"] = reason[:_ERROR_MAX]
 
@@ -95,8 +109,12 @@ def record(env: Envelope, log_path: Path | None = None) -> Iterator[Recorder]:
     try:
         yield rec
     except Exception as e:
-        entry["status"] = "error"
-        entry["error"] = f"{type(e).__name__}: {e}"[:_ERROR_MAX]
+        # 이미 결과가 정해졌으면(대개 reject) 덮어쓰지 않는다.
+        # 거절은 예외로 전파되는 것이 정상이고, 그것을 error 로 바꾸면
+        # "토큰을 태웠는가"를 기록으로 못 가른다.
+        if not rec.settled:
+            entry["status"] = "error"
+            entry["error"] = f"{type(e).__name__}: {e}"[:_ERROR_MAX]
         raise
     finally:
         entry["latency_ms"] = int((time.monotonic() - started) * 1000)

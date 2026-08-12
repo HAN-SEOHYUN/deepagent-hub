@@ -62,8 +62,14 @@ def build_registry(specs: Iterable[TaskSpec]) -> dict[str, TaskSpec]:
 
 
 # 그래프가 늘면 여기 import 한 줄 + 아래 튜플에 이름 한 줄.
-# (진입점 통합 Task 에서 builtin PING 이 등록된다)
-REGISTRY: dict[str, TaskSpec] = build_registry(())
+# 이것이 "명단"이고, hub/graph.py 의 "로직"은 그대로다.
+from hub.builtin import PING  # noqa: E402
+
+REGISTRY: dict[str, TaskSpec] = build_registry(
+    (
+        PING,
+    )
+)
 
 
 def get(task: str, registry: dict[str, TaskSpec] | None = None) -> TaskSpec | None:

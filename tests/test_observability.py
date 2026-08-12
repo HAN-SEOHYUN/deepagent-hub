@@ -232,3 +232,29 @@ def test_default_log_path_is_cwd_independent() -> None:
     p = default_log_path()
     assert p.is_absolute()
     assert p.name == "calls.jsonl"
+
+
+def test_reject_survives_the_propagating_exception(tmp_path: Path) -> None:
+    """거절은 예외로 전파되는 것이 정상이다. 그 예외가 rejected 를 error 로 덮으면 안 된다.
+
+    둘을 가르는 것이 기록의 핵심이다 - rejected 는 호출자 버그이고 토큰을 안 태웠다.
+    """
+    log = tmp_path / "calls.jsonl"
+    with pytest.raises(ValueError):
+        with record(_ENV, log_path=log) as rec:
+            rec.reject("unknown task: nope")
+            raise ValueError("unknown task: nope")
+    (entry,) = _lines(log)
+    assert entry["status"] == "rejected"
+    assert "unknown task" in entry["error"]
+
+
+def test_ok_survives_a_late_exception(tmp_path: Path) -> None:
+    """ok 이후 뒷정리에서 터져도 성공은 성공으로 남는다."""
+    log = tmp_path / "calls.jsonl"
+    with pytest.raises(RuntimeError):
+        with record(_ENV, log_path=log) as rec:
+            rec.ok({"model": "openai:gpt-4.1-mini"})
+            raise RuntimeError("teardown")
+    (entry,) = _lines(log)
+    assert entry["status"] == "ok"

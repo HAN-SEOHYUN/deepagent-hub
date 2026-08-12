@@ -1,0 +1,9 @@
+{
+  "assistant_id": "hub",
+  "input": {
+    "service": "ci",
+    "task": "ping",
+    "request_id": "deploy-check",
+    "payload": {}
+  }
+}
