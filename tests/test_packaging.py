@@ -88,3 +88,32 @@ def test_langgraph_json_is_consistent() -> None:
     assert cfg["env"] == ".env"
     assert cfg["python_version"] == "3.13"
     assert "graphs" in cfg, "graphs 키는 비어 있어도 존재해야 한다"
+
+
+def test_graph_modules_import_in_any_order() -> None:
+    """순환 import 회귀 방지 (refs #17).
+
+    hub/registry.py 는 각 그래프 모듈을 import 하고(명단), 그래프 모듈은 TaskSpec 이 필요하다.
+    TaskSpec 을 registry 에 두면 그래프를 먼저 import 할 때 깨진다 -
+    langgraph.json 이 그래프 직통 진입점(`word-example`)도 등록하므로 실제로 일어날 수 있다.
+
+    각 진입 모듈을 **깨끗한 인터프리터에서 단독으로** import 해 본다.
+    """
+    import subprocess
+    import sys
+
+    for module in ("hub.graph", "hub.registry", "hub.builtin", "word_example.graph"):
+        r = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0, f"{module} 단독 import 실패:\n{r.stderr[-600:]}"
+
+
+def test_spec_module_is_a_leaf() -> None:
+    """hub/spec.py 는 프로젝트 내부 모듈을 import 하지 않는다 - 그래야 순환이 안 생긴다."""
+    src = (REPO_ROOT / "hub" / "spec.py").read_text(encoding="utf-8")
+    for bad in ("from hub.", "import hub", "from word_example", "import word_example"):
+        assert bad not in src, f"hub/spec.py 가 내부 모듈을 import 한다: {bad!r}"

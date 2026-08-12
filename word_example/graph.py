@@ -26,7 +26,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from hub.registry import TaskSpec
+from hub.spec import TaskSpec
 from word_example.checks import violations
 from word_example.prompts import build_user_message, system_prompt
 from word_example.schema import WordExampleIn, WordExampleOut
