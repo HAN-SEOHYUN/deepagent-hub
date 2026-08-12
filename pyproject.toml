@@ -31,7 +31,7 @@ build-backend = "setuptools.build_meta"
 # 패키지를 전부 선언한다. 빠뜨리면 로컬에서는 CWD 덕에 돌고 Docker 에서만 깨진다.
 # 그래프를 추가할 때 여기에 함께 등재한다.
 [tool.setuptools.packages.find]
-include = ["hub*"]
+include = ["hub*", "word_example*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
