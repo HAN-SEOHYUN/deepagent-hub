@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from hub.registry import TaskSpec
+from word_example.checks import violations
 from word_example.prompts import build_user_message, system_prompt
 from word_example.schema import WordExampleIn, WordExampleOut
 
@@ -37,6 +38,8 @@ _DEFAULT_MODEL = "openai:gpt-4.1-mini"
 _TIMEOUT_S = 45.0
 # 기본 2회는 45s 예산 내 초과 위험.
 _MAX_RETRIES = 1
+# 품질 위반 시 재생성 횟수. 1회만 - 무한 루프가 나면 토큰이 무한히 탄다.
+_MAX_REGENERATIONS = 1
 
 # 테스트가 monkeypatch 로 갈아끼울 수 있게 모듈 변수로 둔다.
 _MODEL = None
@@ -96,22 +99,42 @@ def _structured():
     return _cached
 
 
-def generate(state: WordExampleState) -> dict:
-    """프롬프트 조립 -> LLM -> 응답 조립."""
-    payload = WordExampleIn.model_validate(state)
-    gen: Generated = _structured().invoke(
+def _call(payload: WordExampleIn) -> Generated:
+    return _structured().invoke(
         [
             ("system", system_prompt()),
             ("human", build_user_message(payload)),
         ]
     )
-    out = WordExampleOut(
-        english=payload.english,  # 에코백은 코드가 보장한다
-        example=gen.example,
-        example_ko=gen.example_ko,
-        model=_MODEL or _default_model(),
-    )
-    return out.model_dump()
+
+
+def generate(state: WordExampleState) -> dict:
+    """프롬프트 조립 -> LLM -> 품질 검증 -> (위반 시) 재생성 1회 -> 응답 조립.
+
+    ⛔ **절삭·보정으로 때우지 않는다.** 잘라낸 문장은 예문이 아니고,
+    반쯤 성공한 응답은 호출자 DB 에 저장되어 화면에 뜬다.
+    허브는 저장을 안 하므로 되돌릴 수단이 없다.
+    """
+    payload = WordExampleIn.model_validate(state)
+    attempt = payload
+    bad: list[str] = []
+
+    for _ in range(_MAX_REGENERATIONS + 1):
+        gen = _call(attempt)
+        bad = violations(gen.example, gen.example_ko, payload)
+        if not bad:
+            out = WordExampleOut(
+                english=payload.english,  # 에코백은 코드가 보장한다
+                example=gen.example,
+                example_ko=gen.example_ko,
+                model=_MODEL or _default_model(),
+            )
+            return out.model_dump()
+        # 직전 실패작을 회피 목록에 얹어 같은 답을 다시 받지 않는다.
+        # 원래 avoid 는 유지한다 - 호출자가 피하라고 준 것이다.
+        attempt = attempt.model_copy(update={"avoid": [*attempt.avoid, gen.example]})
+
+    raise ValueError("품질 기준 위반 (재생성 후에도): " + "; ".join(bad))
 
 
 graph = (

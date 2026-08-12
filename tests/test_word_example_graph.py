@@ -78,7 +78,13 @@ def test_english_is_echoed_back_from_the_request(_stub_llm) -> None:
 
 
 def test_echo_back_is_byte_identical_for_phrasal_verb(_stub_llm) -> None:
-    _stub_llm()
+    # 품질 게이트가 생긴 뒤로는 스텁 응답도 검증을 통과해야 한다.
+    _stub_llm(
+        {
+            "example": "Let's put off the meeting until next Monday.",
+            "example_ko": "회의는 다음 주 월요일로 미루죠.",
+        }
+    )
     payload = {"english": "put off", "meaning": "미루다, 연기하다"}
     out = we.graph.invoke(WordExampleIn.model_validate(payload).model_dump())
     assert out["english"] == "put off"
@@ -112,10 +118,11 @@ def test_prompt_carries_word_and_meaning(_stub_llm) -> None:
 def test_avoid_reaches_the_prompt(_stub_llm) -> None:
     seen: list = []
     _stub_llm(capture=seen)
-    payload = {**_PAYLOAD, "avoid": ["Thanks for your prompt reply to my message."]}
+    # 스텁이 내는 문장(_GENERATED)과 다른 문장을 피하라고 준다 - 같으면 중복 위반이 된다.
+    payload = {**_PAYLOAD, "avoid": ["The store gave us a prompt refund without any fuss."]}
     we.graph.invoke(WordExampleIn.model_validate(payload).model_dump())
     text = json.dumps(seen, ensure_ascii=False, default=str)
-    assert "Thanks for your prompt reply to my message." in text
+    assert "The store gave us a prompt refund without any fuss." in text
 
 
 # --- 모델 설정 ---
@@ -205,3 +212,113 @@ def test_sample_request_matches_the_contract(_stub_llm) -> None:
 def test_env_example_documents_the_model_var() -> None:
     repo = Path(__file__).resolve().parent.parent
     assert "WORD_EXAMPLE_MODEL=" in (repo / ".env.example").read_text(encoding="utf-8")
+
+
+# --- 재생성 루프 (refs #19) ---
+
+_BAD_SHORT = {"example": "Prompt reply.", "example_ko": "빠른 답변."}
+_BAD_NO_TARGET = {
+    "example": "Thanks for your quick reply to my message.",
+    "example_ko": "빠르게 답해 주셔서 고마워요.",
+}
+
+
+@pytest.fixture
+def _stub_sequence(monkeypatch: pytest.MonkeyPatch):
+    """호출마다 다른 응답을 주는 스텁. 호출 기록을 남긴다."""
+
+    def _install(responses: list[dict]):
+        state = {"calls": 0, "messages": []}
+
+        class _Stub:
+            def invoke(self, messages):
+                state["messages"].append(messages)
+                i = min(state["calls"], len(responses) - 1)
+                state["calls"] += 1
+                return we.Generated.model_validate(responses[i])
+
+        monkeypatch.setattr(we, "_structured", lambda: _Stub())
+        return state
+
+    return _install
+
+
+def test_passing_output_is_not_regenerated(_stub_sequence) -> None:
+    st = _stub_sequence([_GENERATED])
+    we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+    assert st["calls"] == 1, "통과했는데 재생성했다"
+
+
+def test_violation_triggers_one_regeneration(_stub_sequence) -> None:
+    st = _stub_sequence([_BAD_SHORT, _GENERATED])
+    out = we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+    assert st["calls"] == 2
+    assert out["example"] == _GENERATED["example"]
+
+
+def test_second_violation_raises(_stub_sequence) -> None:
+    _stub_sequence([_BAD_SHORT, _BAD_SHORT])
+    with pytest.raises(ValueError):
+        we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+
+
+def test_at_most_two_llm_calls(_stub_sequence) -> None:
+    """재생성은 1회만. 무한 루프가 나면 토큰이 무한히 탄다."""
+    st = _stub_sequence([_BAD_SHORT, _BAD_SHORT])
+    with pytest.raises(ValueError):
+        we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+    assert st["calls"] == 2
+
+
+def test_error_names_the_violated_rule(_stub_sequence) -> None:
+    _stub_sequence([_BAD_NO_TARGET, _BAD_NO_TARGET])
+    with pytest.raises(ValueError) as exc:
+        we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+    assert "prompt" in str(exc.value), "어느 기준을 어겼는지 알 수 없다"
+
+
+def test_failed_attempt_is_added_to_avoid(_stub_sequence) -> None:
+    """재생성 프롬프트에 직전 실패작이 실려야 같은 답을 안 받는다."""
+    st = _stub_sequence([_BAD_SHORT, _GENERATED])
+    we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+    retry_prompt = json.dumps(st["messages"][1], ensure_ascii=False, default=str)
+    assert _BAD_SHORT["example"] in retry_prompt
+
+
+def test_original_avoid_survives_the_retry(_stub_sequence) -> None:
+    """재생성 때 원래 회피 목록이 사라지면 안 된다."""
+    original = "The store gave us a prompt refund."
+    st = _stub_sequence([_BAD_SHORT, _GENERATED])
+    payload = {**_PAYLOAD, "avoid": [original]}
+    we.graph.invoke(WordExampleIn.model_validate(payload).model_dump())
+    retry_prompt = json.dumps(st["messages"][1], ensure_ascii=False, default=str)
+    assert original in retry_prompt
+    assert _BAD_SHORT["example"] in retry_prompt
+
+
+def test_regeneration_failure_is_recorded_as_error(
+    _stub_sequence, _isolated_log: Path
+) -> None:
+    """LLM 을 불렀으므로 rejected 가 아니라 error 다 - 토큰을 태웠다."""
+    _stub_sequence([_BAD_SHORT, _BAD_SHORT])
+    with pytest.raises(Exception):  # noqa: B017
+        hub_graph.invoke(_envelope())
+    entries = [
+        json.loads(ln) for ln in _isolated_log.read_text(encoding="utf-8").splitlines() if ln.strip()
+    ]
+    assert entries[0]["status"] == "error"
+
+
+def test_duplicate_of_avoid_triggers_regeneration(_stub_sequence) -> None:
+    dup = {"example": "The store gave us a prompt refund.", "example_ko": "바로 환불해 줬어요."}
+    st = _stub_sequence([dup, _GENERATED])
+    payload = {**_PAYLOAD, "avoid": ["The store gave us a prompt refund."]}
+    we.graph.invoke(WordExampleIn.model_validate(payload).model_dump())
+    assert st["calls"] == 2
+
+
+def test_missing_korean_triggers_regeneration(_stub_sequence) -> None:
+    bad_ko = {"example": _GENERATED["example"], "example_ko": "Thanks for the reply."}
+    st = _stub_sequence([bad_ko, _GENERATED])
+    we.graph.invoke(WordExampleIn.model_validate(_PAYLOAD).model_dump())
+    assert st["calls"] == 2
