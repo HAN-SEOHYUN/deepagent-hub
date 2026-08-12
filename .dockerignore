@@ -1,0 +1,40 @@
+# langgraph build 의 Dockerfile 은 빌드 컨텍스트를 통째로 넣는다 (`ADD . /deps/<name>`).
+# 여기서 빼지 않으면 전부 이미지 레이어에 남는다.
+
+# --- 시크릿 ---------------------------------------------------------------
+# .env 는 langgraph.json 의 "env" 를 통해 docker-compose 의 env_file: 로
+# 런타임에 주입된다. 이미지에 구울 필요가 없고, 구우면 레이어에 키가 남는다.
+.env
+.env.*
+
+# --- 런타임 상태 (호스트의 것을 이미지에 넣지 않는다) ----------------------
+.langgraph_api/
+logs/
+*.log
+
+# --- 크기 -----------------------------------------------------------------
+# 오라클 A1 은 2 OCPU / 12GB. 이미지를 가볍게 유지한다.
+.venv/
+.git/
+.github/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# --- 런타임에 안 쓰는 것 ---------------------------------------------------
+tests/
+docs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- AI 도구 · OS ---------------------------------------------------------
+.claude/
+CLAUDE.md
+AGENTS.md
+skills-lock.json
+.DS_Store
+.vscode/
+.idea/
