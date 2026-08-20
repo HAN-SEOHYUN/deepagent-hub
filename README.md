@@ -30,9 +30,15 @@ POST /runs/wait
 ## 개발
 
 ```bash
-uv sync
+uv sync --all-extras        # langgraph dev 는 dev extra 에 있다 (운영 이미지 ELv2 배제, #25)
 cp .env.example .env        # 값은 직접 채운다
 uv run langgraph dev        # 포트 2024
+```
+
+운영과 같은 서빙(FastAPI)으로 띄우려면:
+
+```bash
+uv run uvicorn serve.app:app --port 8000 --env-file .env
 ```
 
 ```bash
