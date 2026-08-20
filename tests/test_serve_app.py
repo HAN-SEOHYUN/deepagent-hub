@@ -159,3 +159,126 @@ def test_unknown_assistant_returns_422_with_registered_list(client: TestClient) 
 
 def test_assistants_roster_is_explicit() -> None:
     assert set(ASSISTANTS) == {"hub", "word-example"}
+
+
+# --- 에러 어댑터 - 전부 2026-08-20 현행 실측 미러 (refs #24) -------------------
+
+
+def _post(client: TestClient, assistant: str, input_: object) -> object:
+    return client.post("/runs/wait", json={"assistant_id": assistant, "input": input_})
+
+
+def test_invalid_envelope_returns_200_error_without_llm(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _isolated_log: Path
+) -> None:
+    calls: list = []
+    monkeypatch.setattr(we, "_structured", lambda: calls.append(1))
+    r = _post(client, "hub", {})
+    assert r.status_code == 200
+    err = r.json()["__error__"]
+    assert err["error"] == "ValidationError"
+    assert "validation error" in err["message"].lower()
+    assert calls == []
+    # rejected 로 기록된다 (api.json status_values)
+    assert json.loads(_isolated_log.read_text().splitlines()[0])["status"] == "rejected"
+
+
+def test_unknown_task_returns_200_error_without_llm(client: TestClient) -> None:
+    r = _post(client, "hub", _envelope("nope"))
+    assert r.status_code == 200
+    err = r.json()["__error__"]
+    assert err["error"] == "ValueError"
+    assert "unknown task" in err["message"]
+
+
+def test_invalid_payload_returns_200_error_without_llm(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list = []
+    monkeypatch.setattr(we, "_structured", lambda: calls.append(1))
+    r = _post(client, "hub", _envelope("word_example", {"english": "prompt"}))  # meaning 누락
+    assert r.status_code == 200
+    assert r.json()["__error__"]["error"] == "ValidationError"
+    assert calls == []
+
+
+def test_missing_input_returns_200_empty_input_error(client: TestClient) -> None:
+    """input 누락 -> 422 가 아니라 200 + EmptyInputError (현행 실측)."""
+    r = client.post("/runs/wait", json={"assistant_id": "hub"})
+    assert r.status_code == 200
+    err = r.json()["__error__"]
+    assert err["error"] == "EmptyInputError"
+    assert "Received no input" in err["message"]
+
+
+def test_non_dict_input_returns_200_invalid_update_error(client: TestClient) -> None:
+    r = _post(client, "hub", [1, 2])
+    assert r.status_code == 200
+    assert r.json()["__error__"]["error"] == "InvalidUpdateError"
+
+
+def test_llm_failure_returns_200_error_and_recorded_as_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _isolated_log: Path
+) -> None:
+    class _Boom:
+        def invoke(self, messages):
+            raise RuntimeError("LLM exploded")
+
+    monkeypatch.setattr(we, "_structured", lambda: _Boom())
+    r = _post(client, "hub", _envelope("word_example", {"english": "a", "meaning": "b"}))
+    assert r.status_code == 200
+    assert r.json()["__error__"]["error"] == "RuntimeError"
+    assert json.loads(_isolated_log.read_text().splitlines()[0])["status"] == "error"
+
+
+def test_quality_violation_returns_200_value_error(client: TestClient, _stub_llm) -> None:
+    """대상 단어가 없는 예문 -> 재생성 후에도 실패 -> ValueError (#27 재현 경로)."""
+    _stub_llm(generated={"example": "This sentence lacks the target word.", "example_ko": "대상 없음."})
+    r = _post(client, "hub", _envelope("word_example", {"english": "prompt", "meaning": "신속한"}))
+    assert r.status_code == 200
+    err = r.json()["__error__"]
+    assert err["error"] == "ValueError"
+    assert "품질 기준 위반" in err["message"]
+
+
+# --- 타임아웃 집행 (refs #24) --------------------------------------------------
+
+
+def test_timeout_returns_200_timeout_error_and_no_serve_record(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _isolated_log: Path
+) -> None:
+    """serve 네임스페이스에 fake 주입 - hub 를 통과시키지 않는다 (플랜 R3-3/R4-2)."""
+    import time
+
+    from serve import app as serve_app
+
+    class _Slow:
+        def invoke(self, _input):
+            time.sleep(1.0)
+            return {"done": True}
+
+    class _FakeSpec:
+        timeout_s = 0.05
+
+    monkeypatch.setitem(serve_app.ASSISTANTS, "slow", _Slow())
+    monkeypatch.setitem(serve_app.DIRECT_TASKS, "slow", "slow_task")
+    monkeypatch.setattr(serve_app, "get_spec", lambda task: _FakeSpec if task == "slow_task" else None)
+
+    r = _post(client, "slow", {})
+    assert r.status_code == 200
+    err = r.json()["__error__"]
+    assert err["error"] == "TimeoutError"
+    assert "0.05" in err["message"]
+    # serve 는 calls.jsonl 에 쓰지 않는다 (호출 1건 = 1줄 원칙)
+    assert not _isolated_log.exists() or _isolated_log.read_text() == ""
+
+
+def test_hub_timeout_peek_uses_spec_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """hub 경유는 봉투 task 를 peek 해 spec.timeout_s 를 쓴다."""
+    from serve.app import _timeout_for
+
+    assert _timeout_for("hub", _envelope("ping")) == 5.0  # PING spec
+    assert _timeout_for("hub", _envelope("word_example")) == 45.0
+    assert _timeout_for("hub", _envelope("nope")) == 60.0  # 미등록 -> 안전망
+    assert _timeout_for("hub", [1, 2]) == 60.0  # 비객체 -> peek 안 함
+    assert _timeout_for("word-example", {}) == 45.0  # 직통
