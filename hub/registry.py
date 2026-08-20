@@ -12,38 +12,11 @@ pkgutil 자동 탐색은 쓰지 않는다 - Docker 에서 조용히 깨지는 �
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import Iterable
 
-from pydantic import BaseModel
+from hub.spec import TaskSpec
 
-
-@dataclass(frozen=True)
-class TaskSpec:
-    """그래프가 자기를 설명하는 descriptor.
-
-    `input_model` 을 그래프가 정의하는 것이 중요하다 - 허브는 "검증하라"만 알고
-    "무엇을 검증하는지"는 모른다.
-    """
-
-    task: str
-    """라우팅 키. 봉투의 `task` 와 일치한다."""
-
-    graph: Any
-    """컴파일된 subgraph. `.invoke(payload: dict) -> dict` 를 갖는다."""
-
-    input_model: type[BaseModel]
-    """페이로드 스키마. 그래프가 정의한다."""
-
-    timeout_s: float
-    """호출자 예산보다 짧게. 호출자가 먼저 끊으면 고아 run 이 토큰만 태운다."""
-
-    description: str
-    """task 목록을 사람이 읽을 때. 미등록 오류 메시지에도 쓰인다."""
-
-    postprocess: Callable[[dict, BaseModel], dict] | None = field(default=None)
-    """출력 후처리. 검증 가능한 품질 기준을 코드가 강제하는 자리."""
+__all__ = ["REGISTRY", "TaskSpec", "build_registry", "get", "known_tasks"]
 
 
 def build_registry(specs: Iterable[TaskSpec]) -> dict[str, TaskSpec]:
@@ -64,10 +37,12 @@ def build_registry(specs: Iterable[TaskSpec]) -> dict[str, TaskSpec]:
 # 그래프가 늘면 여기 import 한 줄 + 아래 튜플에 이름 한 줄.
 # 이것이 "명단"이고, hub/graph.py 의 "로직"은 그대로다.
 from hub.builtin import PING  # noqa: E402
+from word_example.graph import SPEC as WORD_EXAMPLE  # noqa: E402
 
 REGISTRY: dict[str, TaskSpec] = build_registry(
     (
         PING,
+        WORD_EXAMPLE,
     )
 )
 

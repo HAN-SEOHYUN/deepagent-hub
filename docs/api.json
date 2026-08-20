@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "deepagent-hub API",
+  "version": "0.2.0",
+  "generated_at": "2026-08-12",
+  "generated_from": "hub/envelope.py, hub/registry.py, word_example/schema.py (코드에서 자동 생성)",
+  "summary": "여러 서비스가 함께 쓰는 무상태 AI 생성 서버. 허브는 DB 를 건드리지 않는다 - 생성만 하고 저장은 호출자 몫이다.",
+  "transport": {
+    "protocol": "HTTP",
+    "endpoint": "POST /runs/wait",
+    "content_type": "application/json",
+    "note": "LangGraph 서버의 표준 동기 진입점. 비동기(/runs)·스트리밍은 지원하지 않는다.",
+    "base_url": {
+      "local": "http://localhost:2024",
+      "server": "http://<타일넷_IP>:8123  (Tailscale 사설망 전용. 공인터넷 미노출)"
+    }
+  },
+  "entrypoints": {
+    "hub": {
+      "assistant_id": "hub",
+      "status": "정상 경로 - 이것을 쓴다",
+      "input": "봉투(envelope)",
+      "records_calls": true,
+      "applies_policy": true
+    },
+    "direct": {
+      "assistant_id": "<graph-name>  (예: word-example)",
+      "status": "탈출구 - 상시 경로로 쓰지 않는다",
+      "input": "페이로드만 (봉투 없음)",
+      "records_calls": false,
+      "applies_policy": false,
+      "note": "호출 기록이 남지 않아 비용·쿼터 근거가 생기지 않는다. 서비스가 3개를 넘거나 외부 호출자가 생기면 이 경로를 닫는다."
+    }
+  },
+  "envelope": {
+    "description": "호출자가 지켜야 할 유일한 규약. 허브는 봉투만 알고 payload 내용은 모른다.",
+    "schema": {
+      "description": "모든 호출이 이 모양으로 들어온다.\n\n- 네 필드 모두 필수\n- 여분 필드는 무시한다 (확장 규칙: 필드 추가는 선택으로만)\n- 검증 후 불변 - dispatch 도중 변조를 막는다",
+      "properties": {
+        "service": {
+          "description": "누가 부르는가. 기록·정책의 축. 라우팅에는 쓰지 않는다",
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "task": {
+          "description": "무엇을 시키는가. 라우팅 키",
+          "minLength": 1,
+          "title": "Task",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "호출자가 만든 추적 ID. 호출자 로그와 대조하는 데 쓴다",
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "description": "그래프별 입력. 허브는 내용을 모른다",
+          "title": "Payload",
+          "type": "object"
+        }
+      },
+      "required": [
+        "service",
+        "task",
+        "request_id",
+        "payload"
+      ],
+      "title": "Envelope",
+      "type": "object"
+    },
+    "example": {
+      "assistant_id": "hub",
+      "input": {
+        "service": "sb",
+        "task": "word_example",
+        "request_id": "sb-batch-20260812-1234",
+        "payload": {
+          "english": "prompt",
+          "meaning": "신속한, 즉각적인"
+        }
+      }
+    },
+    "extension_rules": [
+      "필드 추가는 선택(optional)으로만 - 필수 필드를 늘리면 기존 호출자가 그날 깨진다",
+      "필드 삭제·의미 변경 금지 - 대신 새 task 를 만든다",
+      "여분 필드는 무시된다 (호환 유지)"
+    ]
+  },
+  "call_granularity": {
+    "batch_request": {
+      "supported": false,
+      "description": "여러 단어를 한 요청에 담는 배치 API 는 없다. 한 요청 = 한 단어.",
+      "reason": "실측 하루 6~17건(평균 11.1) 규모에서 배치로 아낄 것이 거의 없고, 잃는 것은 실재한다 - 개수·순서가 어긋나면 다른 단어에 저장되는 매핑 사고, 하나가 깨지면 전부 날아가는 실패 전파, 재생성용 API 를 따로 유지하는 비용.",
+      "caller_guidance": "호출자가 단건 호출을 병렬 3~5개로 돌린다. 그 규모면 배치와 시간 차이가 없다.",
+      "future": "하루 수백 건으로 늘면 배치 그래프를 추가한다. 그때도 단건은 유지한다 - 재생성이 쓴다."
+    },
+    "multiword_expression": {
+      "supported": true,
+      "description": "한 단어가 여러 낱말로 이루어진 경우(구동사·관용표현)는 정상 지원한다.",
+      "verified_examples": [
+        {
+          "english": "put off",
+          "example": "We had to put off our meeting until next week."
+        },
+        {
+          "english": "run into",
+          "example": "I run into my old friend at the store today."
+        },
+        {
+          "english": "look after",
+          "example": "Can you look after my cat this weekend?"
+        },
+        {
+          "english": "once in a while",
+          "example": "I visit my old friends once in a while."
+        },
+        {
+          "english": "on purpose",
+          "example": "Did you break it on purpose?"
+        }
+      ],
+      "note": "구성 낱말이 문장에서 흩어져도 포함으로 인정한다 (put off -> put the meeting off)."
+    }
+  },
+  "tasks": {
+    "ping": {
+      "description": "LLM 없이 왕복만 확인한다. 배포 헬스체크용",
+      "timeout_s": 5.0,
+      "calls_llm": false,
+      "request": {
+        "assistant_id": "hub",
+        "input": {
+          "service": "ci",
+          "task": "ping",
+          "request_id": "deploy-check",
+          "payload": {}
+        }
+      },
+      "response": {
+        "output": {
+          "pong": true
+        }
+      }
+    },
+    "word_example": {
+      "description": "영어 단어와 뜻을 받아 일상 예문(영어+한글)을 만든다",
+      "timeout_s": 45.0,
+      "calls_llm": true,
+      "model": {
+        "env_var": "WORD_EXAMPLE_MODEL",
+        "default": "openai:gpt-4.1-mini",
+        "current": "openai:gpt-4.1-mini-2025-04-14",
+        "note": "init_chat_model 이 openai:/anthropic: 접두사로 프로바이더까지 바꾼다. .env 수정 + 재기동으로 교체 - 코드 변경 없음."
+      },
+      "request_schema": {
+        "description": "입력.\n\n`meaning` 이 필수인 이유: `prompt` 는 「신속한」(형용사)이자 「자극하다」(동사)이자\n「프롬프트」(명사)다. 뜻 없이는 어느 쪽인지 알 수 없고, 단어장에 이미 있으므로 그대로 받는다.",
+        "properties": {
+          "english": {
+            "description": "대상 단어·구문. 원문 그대로",
+            "minLength": 1,
+            "title": "English",
+            "type": "string"
+          },
+          "meaning": {
+            "description": "한글 뜻. 품사를 가르는 근거",
+            "minLength": 1,
+            "title": "Meaning",
+            "type": "string"
+          },
+          "part_of_speech": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "품사 힌트. 없으면 meaning 으로 추론",
+            "title": "Part Of Speech"
+          },
+          "avoid": {
+            "description": "이미 있는 예문들. 재생성에서 같은 문장이 나오면 사용자는 고장으로 여긴다",
+            "items": {
+              "type": "string"
+            },
+            "title": "Avoid",
+            "type": "array"
+          }
+        },
+        "required": [
+          "english",
+          "meaning"
+        ],
+        "title": "WordExampleIn",
+        "type": "object"
+      },
+      "response_schema": {
+        "description": "출력.\n\n`english` 를 에코백하는 이유: 호출자가 병렬로 던졌을 때 응답이 뒤섞이면\n조용히 다른 단어에 저장된다. 호출자는 불일치를 감지하면 저장하지 않는다.\n\n`model` 을 돌려주는 이유: 모델은 `.env` 로 바뀐다. 호출자가 화면 문구에\n박아두면 모델을 바꾼 순간 그 문구가 거짓말이 된다.",
+        "properties": {
+          "english": {
+            "description": "요청한 단어 그대로 (에코백)",
+            "minLength": 1,
+            "title": "English",
+            "type": "string"
+          },
+          "example": {
+            "description": "영어 예문 한 문장",
+            "minLength": 1,
+            "title": "Example",
+            "type": "string"
+          },
+          "example_ko": {
+            "description": "자연스러운 한글",
+            "minLength": 1,
+            "title": "Example Ko",
+            "type": "string"
+          },
+          "model": {
+            "description": "실제로 쓴 모델",
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "english",
+          "example",
+          "example_ko",
+          "model"
+        ],
+        "title": "WordExampleOut",
+        "type": "object"
+      },
+      "examples": [
+        {
+          "label": "형용사 (기본)",
+          "request": {
+            "assistant_id": "hub",
+            "input": {
+              "service": "sb",
+              "task": "word_example",
+              "request_id": "sb-batch-20260812-0001",
+              "payload": {
+                "english": "prompt",
+                "meaning": "신속한, 즉각적인",
+                "part_of_speech": "adjective",
+                "avoid": []
+              }
+            }
+          },
+          "response": {
+            "output": {
+              "english": "prompt",
+              "example": "Thank you for your prompt reply to my email.",
+              "example_ko": "이메일에 빨리 답해 주셔서 고마워요.",
+              "model": "openai:gpt-4.1-mini-2025-04-14"
+            }
+          }
+        },
+        {
+          "label": "구동사 (여러 낱말)",
+          "request": {
+            "assistant_id": "hub",
+            "input": {
+              "service": "sb",
+              "task": "word_example",
+              "request_id": "sb-batch-20260812-0002",
+              "payload": {
+                "english": "put off",
+                "meaning": "미루다, 연기하다"
+              }
+            }
+          },
+          "response": {
+            "output": {
+              "english": "put off",
+              "example": "We had to put off our meeting until next week.",
+              "example_ko": "우리 회의를 다음 주로 미뤘어요.",
+              "model": "openai:gpt-4.1-mini-2025-04-14"
+            }
+          }
+        },
+        {
+          "label": "재생성 (avoid 사용)",
+          "request": {
+            "assistant_id": "hub",
+            "input": {
+              "service": "sb",
+              "task": "word_example",
+              "request_id": "sb-regen-20260812-0003",
+              "payload": {
+                "english": "prompt",
+                "meaning": "신속한, 즉각적인",
+                "avoid": [
+                  "Thank you for your prompt reply to my email."
+                ]
+              }
+            }
+          },
+          "response": {
+            "output": {
+              "english": "prompt",
+              "example": "The doctor gave prompt care to the injured man.",
+              "example_ko": "의사가 다친 남자에게 즉시 치료를 해 주었어요.",
+              "model": "openai:gpt-4.1-mini-2025-04-14"
+            }
+          },
+          "note": "avoid 의 문장과 사실상 같으면(구두점·대소문자 차이 포함) 재생성한다."
+        }
+      ],
+      "quality_gate": {
+        "description": "「자연스럽다」는 검증할 수 없다. 셀 수 있는 것만 코드가 강제한다. 위반 시 재생성 1회 -> 그래도 위반이면 run error. 절삭·보정으로 때우지 않는다.",
+        "enforced_by_code": [
+          {
+            "rule": "대상 단어 포함",
+            "detail": "어형 변화 허용(run->running/ran), 대소문자 무시, 구동사는 흩어져도 인정, 부분 문자열은 불인정(cat != category)"
+          },
+          {
+            "rule": "길이",
+            "detail": "6~14 단어, 경계 포함"
+          },
+          {
+            "rule": "avoid 중복",
+            "detail": "구두점·대소문자·공백 차이는 동일로 본다"
+          },
+          {
+            "rule": "example_ko 한글",
+            "detail": "한글(가-힣)이 하나라도 있어야 한다"
+          }
+        ],
+        "enforced_by_prompt_only": [
+          "일상 상황 (집·직장·가게·약속)",
+          "대상 단어 외에는 쉬운 어휘",
+          "고유명사 금지",
+          "한글 번역투 금지"
+        ],
+        "prompt_only_reason": "판정 규칙이 자의적이라 코드로 못 박으면 오탐이 더 해롭다."
+      }
+    }
+  },
+  "errors": {
+    "principle": "반쯤 성공한 응답을 만들지 않는다. 계약을 못 지키면 run 을 error 로 끝낸다. 빈 문자열을 200 으로 보내면 그 쓰레기가 호출자 DB 에 저장되고 화면에 뜬다.",
+    "response_shape": {
+      "__error__": {
+        "error": "<예외 타입>",
+        "message": "<사유>"
+      }
+    },
+    "cases": [
+      {
+        "case": "봉투 필드 누락 (service/task/request_id/payload)",
+        "error": "ValidationError",
+        "calls_llm": false,
+        "recorded_as": "rejected",
+        "message_example": "invalid envelope: service: missing"
+      },
+      {
+        "case": "미등록 task",
+        "error": "ValueError",
+        "calls_llm": false,
+        "recorded_as": "rejected",
+        "message_example": "unknown task: 'nope' (known: ['ping', 'word_example'])"
+      },
+      {
+        "case": "payload 스키마 위반 (english/meaning 누락·빈 문자열)",
+        "error": "ValidationError",
+        "calls_llm": false,
+        "recorded_as": "rejected",
+        "message_example": "invalid payload for 'word_example': meaning: missing"
+      },
+      {
+        "case": "LLM 타임아웃 / rate limit",
+        "error": "APIError 계열",
+        "calls_llm": true,
+        "recorded_as": "error",
+        "note": "라이브러리가 1회 재시도 후 실패"
+      },
+      {
+        "case": "품질 기준 위반 (재생성 후에도)",
+        "error": "ValueError",
+        "calls_llm": true,
+        "recorded_as": "error",
+        "message_example": "품질 기준 위반 (재생성 후에도): 대상 단어가 예문에 없다: 'prompt'"
+      },
+      {
+        "case": "모델 권한 없음 / 크레딧 부족",
+        "error": "PermissionDeniedError / RateLimitError",
+        "calls_llm": true,
+        "recorded_as": "error"
+      }
+    ],
+    "caller_guidance": {
+      "batch": "그 항목만 건너뛰고 잡은 성공으로 끝낸다. 허브가 죽어 있어도 수집은 성공해야 한다.",
+      "interactive": "사용자에게 실패를 알리되 기존 데이터를 날리지 않는다.",
+      "echo_check": "응답 english 가 요청과 다르면 저장하지 않는다. 병렬 호출에서 응답이 뒤섞이면 조용히 잘못된 데이터가 쌓인다.",
+      "recovery": "실패한 항목은 다음 배치가 다시 시도한다. 멱등성이 재시도 장치를 대신한다."
+    }
+  },
+  "not_supported": [
+    "배치(다건) 요청 - call_granularity.batch_request 참조",
+    "비동기 잡 (POST /runs) - 동기만",
+    "스트리밍 (SSE)",
+    "호출자 인증 - 자리만 있고 지금은 통과 (Tailscale 이 경계)",
+    "레이트리밋·쿼터 - 호출 기록이 쌓인 뒤 근거를 갖고 정한다",
+    "결과 저장 - 허브는 DB 를 건드리지 않는다"
+  ],
+  "observability": {
+    "note": "호출 1건이 JSONL 1줄. 응답에는 안 실린다.",
+    "location": "logs/calls.jsonl",
+    "fields": [
+      "ts",
+      "request_id",
+      "service",
+      "task",
+      "status",
+      "latency_ms",
+      "model",
+      "tokens_in",
+      "tokens_out",
+      "error"
+    ],
+    "status_values": {
+      "ok": "정상",
+      "rejected": "LLM 에 닿기 전 거절 - 토큰 미소모, 호출자 버그를 뜻한다",
+      "error": "그래프 실행 중 실패 - 토큰 소모됨"
+    },
+    "not_recorded": [
+      "payload 원문",
+      "LLM 출력 원문"
+    ]
+  },
+  "measured": {
+    "date": "2026-08-12",
+    "task": "word_example",
+    "sample_size": 33,
+    "success": 33,
+    "failure": 0,
+    "regeneration": 0,
+    "example_length": {
+      "min": 6,
+      "max": 11,
+      "mean": 8.4
+    },
+    "tokens_per_call": {
+      "input": 512,
+      "output": 31
+    },
+    "latency_ms": {
+      "mean": 1179,
+      "p95": 1874,
+      "max": 2696
+    }
+  }
+}
