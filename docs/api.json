@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "name": "deepagent-hub API",
-  "version": "0.2.0",
-  "generated_at": "2026-08-12",
+  "version": "0.3.0",
+  "generated_at": "2026-08-20",
   "generated_from": "hub/envelope.py, hub/registry.py, word_example/schema.py (코드에서 자동 생성)",
   "summary": "여러 서비스가 함께 쓰는 무상태 AI 생성 서버. 허브는 DB 를 건드리지 않는다 - 생성만 하고 저장은 호출자 몫이다.",
   "transport": {
     "protocol": "HTTP",
     "endpoint": "POST /runs/wait",
     "content_type": "application/json",
-    "note": "LangGraph 서버의 표준 동기 진입점. 비동기(/runs)·스트리밍은 지원하지 않는다.",
+    "note": "FastAPI 직접 서빙(#21) - 와이어 형식은 langgraph 서버와 동일하다. 비동기(/runs)·스트리밍은 지원하지 않는다.",
     "base_url": {
-      "local": "http://localhost:2024",
-      "server": "http://<타일넷_IP>:8123  (Tailscale 사설망 전용. 공인터넷 미노출)"
+      "local": "http://localhost:8000  (uvicorn. langgraph dev 는 2024)",
+      "server": "http://deepagent-hub.deepagent-hub.svc.cluster.local:8000  (클러스터 내부 전용. 외부 미노출)"
     }
   },
   "entrypoints": {
