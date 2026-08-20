@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -70,15 +71,31 @@ class Recorder:
 
 
 def _append(entry: dict[str, Any], log_path: Path) -> None:
-    """기록 실패는 삼킨다 - 관측이 본업을 죽이면 안 된다."""
+    """기록 실패는 삼킨다 - 관측이 본업을 죽이면 안 된다.
+
+    싱크는 둘이다 (refs #23):
+    - **stdout** - k8s 가 수집하는 경로. 컨테이너 파일은 휘발되므로 stdout 이
+      없으면 중앙 백엔드(Loki)에 아무것도 안 남는다
+    - **파일** - 로컬 분석용 (jq 로 슬라이스). 존치
+
+    한쪽이 죽어도 다른 쪽은 시도한다 - 그래서 try 를 나눈다.
+    """
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         # ensure_ascii=True: 로그는 ASCII 만. 이모지·비ASCII 가 인코딩 충돌로
         # 그래프 로드를 실패시킨 전례가 있다(참조 구현 cp949 사고).
         line = json.dumps(entry, ensure_ascii=True)
+    except Exception:  # noqa: BLE001 - 기록 실패로 호출을 죽이지 않는다
+        return
+    try:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="ascii") as f:
             f.write(line + "\n")
-    except Exception:  # noqa: BLE001 - 기록 실패로 호출을 죽이지 않는다
+    except Exception:  # noqa: BLE001
         pass
 
 

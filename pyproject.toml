@@ -9,19 +9,24 @@ requires-python = "==3.13.*"
 # 0.3.8 로 조용히 떠올랐다. 마이너 버전이 통째로 바뀌어도 아무도 모른다.
 dependencies = [
     "langgraph>=0.6.0,<2",
-    "langgraph-cli[inmem]>=0.1.55,<0.5",
     "langchain>=1.0.7,<2",
     "langchain-core>=1.0.5,<2",
     "langchain-openai>=1.0.2,<2",
     "langchain-anthropic>=1.0.3,<2",
     "pydantic>=2.0.0,<3",
     "python-dotenv>=1.0.0,<2",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0,<9",
     "ruff>=0.6.1,<1",
+    "httpx>=0.27,<1",
+    # langgraph dev (로컬 전용). inmem extra 가 ELv2 langgraph-api 를 끌고 오므로
+    # 본 의존성에 두면 운영 이미지에 안 쓰는 ELv2 코드가 실린다 (D22, #25)
+    "langgraph-cli[inmem]>=0.1.55,<0.5",
 ]
 
 [build-system]
@@ -31,7 +36,7 @@ build-backend = "setuptools.build_meta"
 # 패키지를 전부 선언한다. 빠뜨리면 로컬에서는 CWD 덕에 돌고 Docker 에서만 깨진다.
 # 그래프를 추가할 때 여기에 함께 등재한다.
 [tool.setuptools.packages.find]
-include = ["hub*", "word_example*"]
+include = ["hub*", "word_example*", "serve*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
