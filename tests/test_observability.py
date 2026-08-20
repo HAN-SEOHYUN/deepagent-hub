@@ -258,3 +258,54 @@ def test_ok_survives_a_late_exception(tmp_path: Path) -> None:
             raise RuntimeError("teardown")
     (entry,) = _lines(log)
     assert entry["status"] == "ok"
+
+
+# --- stdout 싱크 (refs #23) ---------------------------------------------------
+
+
+def _env() -> Envelope:
+    return Envelope(service="sb", task="ping", request_id="stdout-test", payload={})
+
+
+def test_record_emits_one_jsonl_line_to_stdout(tmp_path, capsys) -> None:
+    """호출 1건 = stdout JSONL 1줄. k8s(Loki) 수집 경로다."""
+    log = tmp_path / "calls.jsonl"
+    with record(_env(), log_path=log) as rec:
+        rec.ok({"pong": True})
+    out_lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(out_lines) == 1
+    entry = json.loads(out_lines[0])
+    assert entry["task"] == _env().task
+    assert entry["status"] == "ok"
+    # 파일과 같은 내용이어야 한다
+    assert out_lines[0] == log.read_text().splitlines()[0]
+
+
+def test_stdout_line_is_ascii_only(tmp_path, capsys) -> None:
+    """비ASCII 는 이스케이프된다 - 인코딩 충돌로 그래프 로드가 깨진 전례(D17)."""
+    log = tmp_path / "calls.jsonl"
+    env = Envelope(service="sb", task="word_example", request_id="한글-id", payload={})
+    with record(env, log_path=log) as rec:
+        rec.reject("한글 사유")
+    out = capsys.readouterr().out
+    assert out.strip()
+    assert out.isascii()
+
+
+def test_broken_stdout_does_not_kill_the_call_and_file_survives(tmp_path, monkeypatch) -> None:
+    """stdout 이 막혀도 본업(호출)과 파일 싱크는 산다."""
+    log = tmp_path / "calls.jsonl"
+
+    class _Broken:
+        def write(self, *a):
+            raise OSError("stdout is closed")
+
+        def flush(self):
+            raise OSError("stdout is closed")
+
+    monkeypatch.setattr("hub.observability.sys.stdout", _Broken())
+    with record(_env(), log_path=log) as rec:
+        rec.ok({"pong": True})
+    lines = log.read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == "ok"
