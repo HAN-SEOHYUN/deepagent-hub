@@ -1,0 +1,11 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "hub": "./hub/graph.py:graph",
+    "word-example": "./word_example/graph.py:graph"
+  },
+  "env": ".env",
+  "python_version": "3.13"
+}

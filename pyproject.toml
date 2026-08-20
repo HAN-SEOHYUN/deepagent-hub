@@ -1,0 +1,59 @@
+[project]
+name = "deepagent-hub"
+version = "0.1.0"
+description = "여러 서비스가 함께 쓰는 무상태 AI 생성 서버"
+requires-python = "==3.13.*"
+
+# 모든 의존성에 상한을 붙인다.
+# 참조 구현(dp-agent)은 `deepagents>=0.2.6` 에 상한이 없어 실제 설치본이
+# 0.3.8 로 조용히 떠올랐다. 마이너 버전이 통째로 바뀌어도 아무도 모른다.
+dependencies = [
+    "langgraph>=0.6.0,<2",
+    "langchain>=1.0.7,<2",
+    "langchain-core>=1.0.5,<2",
+    "langchain-openai>=1.0.2,<2",
+    "langchain-anthropic>=1.0.3,<2",
+    "pydantic>=2.0.0,<3",
+    "python-dotenv>=1.0.0,<2",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0,<9",
+    "ruff>=0.6.1,<1",
+    "httpx>=0.27,<1",
+    # langgraph dev (로컬 전용). inmem extra 가 ELv2 langgraph-api 를 끌고 오므로
+    # 본 의존성에 두면 운영 이미지에 안 쓰는 ELv2 코드가 실린다 (D22, #25)
+    "langgraph-cli[inmem]>=0.1.55,<0.5",
+]
+
+[build-system]
+requires = ["setuptools>=73.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# 패키지를 전부 선언한다. 빠뜨리면 로컬에서는 CWD 덕에 돌고 Docker 에서만 깨진다.
+# 그래프를 추가할 때 여기에 함께 등재한다.
+[tool.setuptools.packages.find]
+include = ["hub*", "word_example*", "serve*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+lint.select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "T201",  # print 금지 - 로그는 observability 를 쓴다
+]
+lint.ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["T201"]
+# 실측 스크립트는 사람이 보는 출력이 목적이다
+"scripts/*" = ["T201"]

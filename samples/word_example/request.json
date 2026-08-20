@@ -1,0 +1,14 @@
+{
+  "assistant_id": "hub",
+  "input": {
+    "service": "sb",
+    "task": "word_example",
+    "request_id": "sb-batch-20260812-0001",
+    "payload": {
+      "english": "prompt",
+      "meaning": "신속한, 즉각적인",
+      "part_of_speech": "adjective",
+      "avoid": []
+    }
+  }
+}
