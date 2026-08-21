@@ -313,3 +313,45 @@ def test_normalization_still_rejects_an_unrelated_sentence(english: str) -> None
     통과하기 시작하면 `contains_target` 은 아무것도 안 지키는 함수가 된다.
     """
     assert not contains_target("The weather is nice today outside.", english)
+
+
+# --- 대문자 한 글자 자리표시자 (refs #32) -------------------------------------
+
+
+def test_single_uppercase_letters_are_placeholders() -> None:
+    """`extend A into B` 의 A·B 는 예문에서 실제 대상으로 바뀐다."""
+    assert contains_target("They extended the road into the valley.", "extend A into B")
+
+
+def test_letter_placeholder_still_rejects_an_unrelated_sentence() -> None:
+    """⛔ 완화의 짝. `extend`·`into` 가 없으면 여전히 떨어진다."""
+    assert not contains_target("The weather is nice today outside.", "extend A into B")
+
+
+def test_the_pronoun_I_is_not_a_placeholder() -> None:
+    """`I` 는 1인칭 대명사다. 자리표시자로 지우면 **주어가 아무나여도** 통과한다.
+
+    ⚠️ 표제어를 `I` **한 낱말**로 두고 시험하면 이 예외를 지워도 초록이다 —
+    정규화가 전부 지우면 원문으로 되돌리는 경로가 가려주기 때문이다.
+    그래서 **`I` 가 낀 구**로 관찰한다. 실제로 뮤테이션이 한 번 살아남아 드러났다.
+    """
+    assert contains_target("If I were you, I would leave right now.", "if I were you")
+    assert not contains_target(
+        "If she were you, she would leave right now.", "if I were you"
+    )
+
+
+def test_a_bare_I_headword_still_works() -> None:
+    """표제어가 `I` 하나면 원문 복귀 경로를 탄다 — 그대로 요구된다."""
+    assert contains_target("I think it will rain again tomorrow.", "I")
+    assert not contains_target("She thinks it will rain again tomorrow.", "I")
+
+
+def test_lowercase_a_is_not_a_placeholder() -> None:
+    """소문자 `a` 는 관사와 구분이 안 된다 — 대문자만 자리표시자로 본다.
+
+    `set a good/bad example` 의 `a` 를 지우면 표제어가 헐거워진다.
+    """
+    from word_example.checks import _targets
+
+    assert ["set", "a", "good", "example"] in _targets("set a good/bad example")

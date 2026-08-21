@@ -172,6 +172,19 @@ def _variants(english: str) -> list[str]:
     return out or [english]
 
 
+def _is_letter_placeholder(token: str) -> bool:
+    """`extend A into B` 의 `A`·`B`. 대문자 한 글자는 자리표시자다 (refs #32).
+
+    예문에서는 실제 대상으로 바뀐다: "They extended the road into the valley."
+
+    빼는 것 둘:
+
+    - **`I`** — 1인칭 대명사다. 표제어에 자리표시자로 쓰일 일이 없다
+    - **소문자 `a`/`b`** — 관사 `a` 와 구분이 안 된다. 대문자만 본다
+    """
+    return len(token) == 1 and token.isupper() and token != "I"
+
+
 def _targets(english: str) -> list[list[str]]:
     """표제어를 「매칭 후보 토큰 목록」들로 편다. 하나라도 맞으면 통과다.
 
@@ -184,7 +197,11 @@ def _targets(english: str) -> list[list[str]]:
     stripped = _PARENS.sub(" ", _ELLIPSIS.sub(" ", english))
     out: list[list[str]] = []
     for variant in _variants(stripped):
-        parts = [t for t in _tokens(variant) if t.lower() not in _PLACEHOLDERS]
+        parts = [
+            t
+            for t in _tokens(variant)
+            if t.lower() not in _PLACEHOLDERS and not _is_letter_placeholder(t)
+        ]
         if parts and parts not in out:
             out.append(parts)
     return out or [_tokens(english)]
