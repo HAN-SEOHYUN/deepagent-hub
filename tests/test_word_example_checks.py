@@ -212,3 +212,104 @@ def test_multiple_violations_are_all_reported() -> None:
 def test_violation_messages_are_human_readable() -> None:
     got = violations("Quick.", "Thanks.", _payload())
     assert all(isinstance(v, str) and v.strip() for v in got)
+
+
+# --- 표제어 표기 정규화 (refs #27) -------------------------------------------
+#
+# 단어장 표기는 사람이 읽는 것이지 매칭 사양이 아니다. 아래 셋은 전부 BBC 정상
+# 표제어인데 예문 생성이 **항상** 실패했다 - 검증기가 원문 표기를 글자 그대로
+# 요구했기 때문이다.
+#
+# 이 절의 테스트는 판정을 **느슨하게** 만드는 변경을 지킨다. 그래서 통과 케이스와
+# 같은 수의 거부 케이스를 함께 둔다 - 통과만 늘리면 이 검사는 없는 것과 같다.
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "I finally paid off my debt.",
+        "She paid back the loan last month.",
+        "He cleared his debt in two years.",
+    ],
+)
+def test_phrase_slash_accepts_any_single_variant(example: str) -> None:
+    """`A / B / C` 는 셋 중 **하나만** 쓰이면 된다. 한 문장에 셋을 다 넣을 수 없다."""
+    assert contains_target(example, "pay back / pay off / clear (debt)")
+
+
+@pytest.mark.parametrize(
+    "example",
+    ["She set a good example for us all.", "He set a bad example yesterday."],
+)
+def test_word_slash_accepts_either_word(example: str) -> None:
+    """공백 없는 `good/bad` 는 낱말 단위 대안이다. 나머지 낱말은 살아 있어야 한다."""
+    assert contains_target(example, "set a good/bad example")
+
+
+def test_parenthesised_object_is_optional() -> None:
+    """괄호 안은 **전형적인 목적어를 알려주는 주석**이지 필수 낱말이 아니다.
+
+    `clear (debt)` 에서 `debt` 를 요구하면 "She cleared her student loan." 이 떨어진다.
+    자리표시자 제거만으로는 이 케이스가 안 잡힌다 - 괄호 안이 자리표시자가 아니기 때문.
+    """
+    assert contains_target(
+        "She finally cleared her student loan.", "pay back / pay off / clear (debt)"
+    )
+
+
+def test_placeholder_is_replaced_in_a_real_sentence() -> None:
+    """`someone`/`something` 은 예문에서 실제 대상으로 바뀐다."""
+    assert contains_target("She set her brother up for success.", "set someone up for something")
+
+
+@pytest.mark.parametrize(
+    "example",
+    ["He put me in my place.", "They put the new intern in her place."],
+)
+def test_possessive_moves_with_the_placeholder(example: str) -> None:
+    """소유격은 자리표시자와 **함께** 바뀐다: their -> my / her.
+
+    이걸 놓치면 괄호만 지워도 #120 은 계속 떨어진다.
+    """
+    assert contains_target(example, "put (someone) in their place")
+
+
+def test_bare_possessive_headword_is_still_exact() -> None:
+    """유연한 소유격은 **구·관용구일 때만**이다.
+
+    표제어가 `their` 한 낱말이면 그건 그 단어를 배우는 것이므로 그대로 요구한다.
+    """
+    assert contains_target("Their house is very old.", "their")
+    assert not contains_target("My house is very old.", "their")
+
+
+def test_prefix_headword_matches_a_hyphenated_word() -> None:
+    """접두사 표제어는 붙어 나온다: `pro-` -> `pro-recycling`."""
+    assert contains_target("The pro-recycling campaign worked well.", "pro- (something)")
+    assert not contains_target("The campaign worked well last year.", "pro- (something)")
+
+
+def test_headword_that_is_itself_a_placeholder_falls_back_to_the_original() -> None:
+    """정규화가 표제어를 통째로 지우면 원문으로 되돌린다.
+
+    되돌리지 않으면 후보가 비어 **무조건 실패**가 되고, 재생성만 반복하다 run 이 죽는다.
+    """
+    assert contains_target("I need something to eat right now.", "something")
+    assert not contains_target("The weather is nice today outside.", "something")
+
+
+@pytest.mark.parametrize(
+    "english",
+    [
+        "pay back / pay off / clear (debt)",
+        "set someone up for something",
+        "put (someone) in their place",
+    ],
+)
+def test_normalization_still_rejects_an_unrelated_sentence(english: str) -> None:
+    """⚠️ 이 절의 핵심 가드.
+
+    정규화는 판정을 느슨하게 만든다. 대상 단어가 **정말로 안 들어간** 문장까지
+    통과하기 시작하면 `contains_target` 은 아무것도 안 지키는 함수가 된다.
+    """
+    assert not contains_target("The weather is nice today outside.", english)
